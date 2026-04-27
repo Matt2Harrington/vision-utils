@@ -7,7 +7,7 @@ import cv2
 import os
 from transformers import pipeline, Pipeline
 from PIL import Image, ImageChops
-from moviepy.editor import ImageSequenceClip, VideoFileClip
+from moviepy import ImageSequenceClip, VideoFileClip
 from torch.multiprocessing import Pool, Process, set_start_method, cpu_count
 from collections import namedtuple
 from typing import List, Optional
@@ -187,7 +187,7 @@ class VideoHandler(FileMixin):
         # If we down-sampled, render at the target fps so duration matches the source audio.
         out_fps = self.target_fps if (self.target_fps and self.target_fps < video_clip.fps) else video_clip.fps
         clip = ImageSequenceClip([obj.frame for obj in sorted_frames], fps=out_fps)
-        clip = clip.set_audio(video_clip.audio)
+        clip = clip.with_audio(video_clip.audio)
         clip.write_videofile(
             self.over_under_video_filename(),
             codec="libx264",
