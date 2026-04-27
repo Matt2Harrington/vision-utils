@@ -41,6 +41,7 @@ class VideoHandler(FileMixin):
         spatial_extra: str = "",
         zoom: float = 1.0,
         stereo_format: str = "ou",
+        spatial_enabled: bool = True,
     ):
         self.filename = filename
         self.directory = None
@@ -56,6 +57,7 @@ class VideoHandler(FileMixin):
         self.spatial_extra = spatial_extra
         self.zoom = zoom
         self.stereo_format = stereo_format if stereo_format in ("ou", "sbs") else "ou"
+        self.spatial_enabled = spatial_enabled
 
     def over_under_video_filename(self):
         return f"{self.get_directory_name()}/over_under.mp4"
@@ -231,6 +233,13 @@ class VideoHandler(FileMixin):
             temp_audiofile=self.spatial_audio_filename(),
             remove_temp=True,
         )
+
+        if not self.spatial_enabled:
+            logging.info(
+                f"Spatial tagging disabled; raw stereo output left at "
+                f"{self.over_under_video_filename()}"
+            )
+            return
 
         logging.info("Running spatial tagger")
         spatial_cmd = [

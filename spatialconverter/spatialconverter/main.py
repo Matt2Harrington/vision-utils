@@ -76,6 +76,11 @@ if __name__ == "__main__":
         default="ou",
         help="output stereo layout: ou=over-under (top/bottom, default), sbs=side-by-side (left/right)",
     )
+    parser.add_argument(
+        "--no-spatial",
+        action="store_true",
+        help="skip the ./spatial tagging step and stop after producing the raw stereo file (useful for non-Apple players)",
+    )
 
     args = parser.parse_args()
 
@@ -96,6 +101,7 @@ if __name__ == "__main__":
             spatial_extra=args.spatial_extra,
             zoom=args.zoom,
             stereo_format=args.stereo_format,
+            spatial_enabled=not args.no_spatial,
         )
         video_handler.make_video()
     else:
