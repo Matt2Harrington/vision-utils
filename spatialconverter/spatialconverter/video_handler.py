@@ -1,4 +1,6 @@
 import logging
+import shlex
+import subprocess
 import numpy as np
 import scipy
 import cv2
@@ -8,7 +10,7 @@ from PIL import Image, ImageChops
 from moviepy.editor import ImageSequenceClip, VideoFileClip
 from torch.multiprocessing import Pool, Process, set_start_method, cpu_count
 from collections import namedtuple
-from typing import List
+from typing import List, Optional
 from spatialconverter.file_mixin import FileMixin
 from spatialconverter.timer import timing
 
@@ -19,11 +21,37 @@ FrameData = namedtuple("FrameData", ["index", "frame"])
 
 
 class VideoHandler(FileMixin):
-    def __init__(self, filename, fps=30):
+    MODEL_MAP = {
+        "small": "depth-anything/Depth-Anything-V2-Small-hf",
+        "base": "depth-anything/Depth-Anything-V2-Base-hf",
+        "large": "depth-anything/Depth-Anything-V2-Large-hf",
+    }
+
+    def __init__(
+        self,
+        filename,
+        model_size: str = "large",
+        target_fps: float | None = None,
+        shift_left: int = 10,
+        shift_right: int = 50,
+        hfov: float = 63.4,
+        cdist: float = 19.24,
+        hadjust: float = 0.02,
+        projection: str = "rect",
+        spatial_extra: str = "",
+    ):
         self.filename = filename
         self.directory = None
         self.pipe = None
-        self.fps = fps
+        self.model_size = model_size
+        self.target_fps = target_fps
+        self.shift_left = shift_left
+        self.shift_right = shift_right
+        self.hfov = hfov
+        self.cdist = cdist
+        self.hadjust = hadjust
+        self.projection = projection
+        self.spatial_extra = spatial_extra
 
     def over_under_video_filename(self):
         return f"{self.get_directory_name()}/over_under.mp4"
@@ -36,31 +64,37 @@ class VideoHandler(FileMixin):
 
     def get_pipe(self) -> Pipeline:
         """
-        Taken from https://github.com/DepthAnything/Depth-Anything-V2. Note that we use the
-        depth-anything-v2-small-hf model because it runs faster since it's a small model. Feel
-        free to swap out this model with the larger one if you want a higher quality output.
-        We also haven't change any of the parameters and that could improve the estimation as well.
+        Depth-Anything-V2 model from https://github.com/DepthAnything/Depth-Anything-V2.
+        Small is fastest, Large is highest quality. Default Large preserves prior behavior.
         """
         if self.pipe is None:
-            # Main depth estimation model
-            self.pipe = pipeline(
-                task="depth-estimation", model="depth-anything/Depth-Anything-V2-small-hf"
-            )
+            model = self.MODEL_MAP.get(self.model_size, self.MODEL_MAP["large"])
+            self.pipe = pipeline(task="depth-estimation", model=model)
         return self.pipe
 
     @timing
     def produce_frames(self):
-        """Return a list of frames that we can processing on 1 by 1"""
+        """Return a list of frames; if target_fps is below source fps, sample at a stride."""
         capture = cv2.VideoCapture(self.filename)
+        src_fps = capture.get(cv2.CAP_PROP_FPS) or 0.0
+        if self.target_fps and src_fps > 0 and self.target_fps < src_fps:
+            stride = src_fps / self.target_fps
+        else:
+            stride = 1.0
         frame_idx = 0
+        kept_idx = 0
+        next_target = 0.0
         result = []
         while True:
-            frame_idx += 1
             return_code, frame = capture.read()
             if not return_code:
                 break
-            frame_tuple = (frame, frame_idx)
-            result.append(frame_tuple)
+            if frame_idx >= next_target:
+                kept_idx += 1
+                result.append((frame, kept_idx))
+                next_target += stride
+            frame_idx += 1
+        capture.release()
         return result
 
     def shift_image(self, data, shift_amount=10):
@@ -116,7 +150,7 @@ class VideoHandler(FileMixin):
 
         # saving the mask
         mask = cv2.cvtColor(new_image, cv2.COLOR_BGR2GRAY)
-        inpainted = cv2.inpaint(org_image, mask, 3, cv2.INPAINT_NS)
+        inpainted = cv2.inpaint(org_image, mask, 7, cv2.INPAINT_TELEA)
         return inpainted
 
     def create_over_under_video_frame(self, frame) -> List[FrameData]:
@@ -125,9 +159,9 @@ class VideoHandler(FileMixin):
         logging.info(f"frame: {index}")
 
         # Shift and inpaint images
-        shifted_left_image = self.shift_image(image, 10).convert("RGB")
+        shifted_left_image = self.shift_image(image, self.shift_left).convert("RGB")
         inpainted_left_image = self.inpaint(shifted_left_image)
-        shifted_right_image = self.shift_image(image, 50).convert("RGB")
+        shifted_right_image = self.shift_image(image, self.shift_right).convert("RGB")
         inpainted_right_image = self.inpaint(shifted_right_image)
 
         # Combine images over and under
@@ -149,10 +183,11 @@ class VideoHandler(FileMixin):
 
         # Since we parallelized this, let's re-sort the frames by the index
         sorted_frames = sorted(output, key=lambda x: x.index)
-        clip = ImageSequenceClip([obj.frame for obj in sorted_frames], fps=self.fps)
         video_clip = VideoFileClip(self.filename)
-        audio = video_clip.audio
-        clip = clip.set_audio(audio)
+        # If we down-sampled, render at the target fps so duration matches the source audio.
+        out_fps = self.target_fps if (self.target_fps and self.target_fps < video_clip.fps) else video_clip.fps
+        clip = ImageSequenceClip([obj.frame for obj in sorted_frames], fps=out_fps)
+        clip = clip.set_audio(video_clip.audio)
         clip.write_videofile(
             self.over_under_video_filename(),
             codec="libx264",
@@ -161,6 +196,22 @@ class VideoHandler(FileMixin):
             remove_temp=True,
         )
 
-        logging.info("Running OS process")
-        command = f"./spatial make -i {self.over_under_video_filename()} -f ou -o {self.spatial_video_filename()} --args ./iPhone15Pro.args"
-        os.system(command)
+        logging.info("Running spatial tagger")
+        spatial_cmd = [
+            "./spatial", "make",
+            "-i", self.over_under_video_filename(),
+            "-f", "ou",
+            "-o", self.spatial_video_filename(),
+            "--cdist", str(self.cdist),
+            "--hfov", str(self.hfov),
+            "--hadjust", str(self.hadjust),
+            "--projection", self.projection,
+        ]
+        if self.spatial_extra:
+            # Append free-form extra args (e.g. extra `spatial` flags). Later
+            # flags override earlier ones for `spatial`, so this is the override.
+            spatial_cmd += shlex.split(self.spatial_extra)
+        logging.info(f"spatial cmd: {' '.join(shlex.quote(a) for a in spatial_cmd)}")
+        result = subprocess.run(spatial_cmd, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"./spatial exited with code {result.returncode}")
