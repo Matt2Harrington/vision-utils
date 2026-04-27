@@ -23,11 +23,16 @@ See [Photo Blog Post](https://blog.studiolanes.com/posts/2d-to-spatial-photos) a
 ### Dependencies
 We borrow the executable and iPhone args from [Mike Swanson](https://blog.mikeswanson.com/spatial) for converting over under videos to spatial videos.
 
-Requires Python 3.10–3.14 and [poetry](https://github.com/python-poetry/poetry)
-on PATH. Works with both Poetry 1.x and 2.x.
+Requires [poetry](https://github.com/python-poetry/poetry) on PATH and
+**Python 3.13** (3.10–3.13 work; avoid Homebrew's `python@3.14` — its bundled
+`pyexpat` is broken on macOS and crashes poetry with `Symbol not found:
+_XML_SetAllocTrackerActivationThreshold`).
 
 ```bash
+brew install python@3.13   # if not already installed
+
 cd spatialconverter
+poetry env use python3.13
 poetry install
 
 # transformers can't be resolved by poetry from source, so install it into the
