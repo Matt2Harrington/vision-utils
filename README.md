@@ -23,21 +23,45 @@ See [Photo Blog Post](https://blog.studiolanes.com/posts/2d-to-spatial-photos) a
 ### Dependencies
 We borrow the executable and iPhone args from [Mike Swanson](https://blog.mikeswanson.com/spatial) for converting over under videos to spatial videos.
 
-We assume that you have [poetry](https://github.com/python-poetry/poetry) globally installed for python packaging and you're using Python 3.
+Requires Python 3.10–3.14 and [poetry](https://github.com/python-poetry/poetry)
+on PATH. Works with both Poetry 1.x and 2.x.
 
 ```bash
 cd spatialconverter
 poetry install
-poetry shell
-# Poetry breaks when trying to install transformers from source, so run this installation the first time
-pip install -q git+https://github.com/huggingface/transformers.git
+
+# transformers can't be resolved by poetry from source, so install it into the
+# project venv directly. Required the first time only.
+poetry run pip install -q "git+https://github.com/huggingface/transformers.git"
 ```
 
 ### Subsequent runs
 
 ```bash
 cd spatialconverter/spatialconverter
-poetry shell
-python main.py --photo /Users/herk/Downloads/photo.png
-# python main.py --video /Users/herk/Downloads/skydive.mp4
+poetry run python main.py --photo /path/to/photo.png
+# poetry run python main.py --video /path/to/video.mp4
 ```
+
+The video pipeline accepts a number of flags to trade speed for quality and to
+control the spatial-output metadata that Vision Pro reads. Run
+`poetry run python main.py --help` for the full list, or here are the most
+useful ones:
+
+```bash
+# Faster preview (smaller depth model, half the source fps)
+poetry run python main.py --video clip.mp4 --model-size small --target-fps 24
+
+# Wider lens — fixes "too zoomed in" playback on Vision Pro
+poetry run python main.py --video clip.mp4 --hfov 90
+
+# Stronger 3D effect
+poetry run python main.py --video clip.mp4 --shift-left 15 --shift-right 70
+```
+
+Available flags: `--model-size {small,base,large}` (default `large`),
+`--target-fps F` (default = source fps), `--shift-left N` / `--shift-right N`
+(default 10 / 50), `--hfov F` (default 63.4°), `--cdist F` (default 19.24),
+`--hadjust F` (default 0.02), `--projection {rect,fisheye,half_equirect}`
+(default `rect`), `--spatial-extra "<...>"` (free-form flags appended to the
+`./spatial make` call).
