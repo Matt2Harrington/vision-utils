@@ -39,6 +39,8 @@ class VideoHandler(FileMixin):
         hadjust: float = 0.02,
         projection: str = "rect",
         spatial_extra: str = "",
+        zoom: float = 1.0,
+        stereo_format: str = "ou",
     ):
         self.filename = filename
         self.directory = None
@@ -52,6 +54,8 @@ class VideoHandler(FileMixin):
         self.hadjust = hadjust
         self.projection = projection
         self.spatial_extra = spatial_extra
+        self.zoom = zoom
+        self.stereo_format = stereo_format if stereo_format in ("ou", "sbs") else "ou"
 
     def over_under_video_filename(self):
         return f"{self.get_directory_name()}/over_under.mp4"
@@ -72,6 +76,33 @@ class VideoHandler(FileMixin):
             self.pipe = pipeline(task="depth-estimation", model=model)
         return self.pipe
 
+    def _apply_zoom(self, frame):
+        """Scale the frame around its center by self.zoom while preserving frame size.
+
+        zoom > 1.0 crops the center and scales it back up (zoom in).
+        zoom < 1.0 scales the frame down and pads the rest with black (zoom out).
+        zoom == 1.0 returns the frame unchanged.
+        """
+        if self.zoom is None or abs(self.zoom - 1.0) < 1e-6:
+            return frame
+        h, w = frame.shape[:2]
+        if self.zoom > 1.0:
+            new_h = max(1, int(h / self.zoom))
+            new_w = max(1, int(w / self.zoom))
+            y0 = (h - new_h) // 2
+            x0 = (w - new_w) // 2
+            cropped = frame[y0:y0 + new_h, x0:x0 + new_w]
+            return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            new_h = max(1, int(h * self.zoom))
+            new_w = max(1, int(w * self.zoom))
+            scaled = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            result = np.zeros_like(frame)
+            y0 = (h - new_h) // 2
+            x0 = (w - new_w) // 2
+            result[y0:y0 + new_h, x0:x0 + new_w] = scaled
+            return result
+
     @timing
     def produce_frames(self):
         """Return a list of frames; if target_fps is below source fps, sample at a stride."""
@@ -91,7 +122,7 @@ class VideoHandler(FileMixin):
                 break
             if frame_idx >= next_target:
                 kept_idx += 1
-                result.append((frame, kept_idx))
+                result.append((self._apply_zoom(frame), kept_idx))
                 next_target += stride
             frame_idx += 1
         capture.release()
@@ -154,7 +185,10 @@ class VideoHandler(FileMixin):
         return inpainted
 
     def create_over_under_video_frame(self, frame) -> List[FrameData]:
-        """Stack the converted images on the top and bottom of each other."""
+        """Build the stereo frame. Stacking depends on self.stereo_format:
+            "ou"  → left on top, right on bottom (vconcat)
+            "sbs" → left on left, right on right (hconcat)
+        """
         image, index = frame
         logging.info(f"frame: {index}")
 
@@ -164,8 +198,10 @@ class VideoHandler(FileMixin):
         shifted_right_image = self.shift_image(image, self.shift_right).convert("RGB")
         inpainted_right_image = self.inpaint(shifted_right_image)
 
-        # Combine images over and under
-        stacked_image = cv2.vconcat([inpainted_left_image, inpainted_right_image])
+        if self.stereo_format == "sbs":
+            stacked_image = cv2.hconcat([inpainted_left_image, inpainted_right_image])
+        else:
+            stacked_image = cv2.vconcat([inpainted_left_image, inpainted_right_image])
         stacked_image = cv2.cvtColor(stacked_image, cv2.COLOR_BGR2RGB)
         return FrameData(index, stacked_image)
 
@@ -200,7 +236,7 @@ class VideoHandler(FileMixin):
         spatial_cmd = [
             "./spatial", "make",
             "-i", self.over_under_video_filename(),
-            "-f", "ou",
+            "-f", self.stereo_format,
             "-o", self.spatial_video_filename(),
             "--cdist", str(self.cdist),
             "--hfov", str(self.hfov),

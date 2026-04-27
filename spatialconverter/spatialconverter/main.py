@@ -64,6 +64,18 @@ if __name__ == "__main__":
         default="",
         help="free-form extra args appended verbatim to the ./spatial make command (e.g. \"--primary right\")",
     )
+    parser.add_argument(
+        "--zoom",
+        type=float,
+        default=1.0,
+        help="pre-process zoom applied to source frames before depth shift; >1.0 zooms in (crops), <1.0 zooms out (letterboxes), 1.0 unchanged",
+    )
+    parser.add_argument(
+        "--stereo-format",
+        choices=["ou", "sbs"],
+        default="ou",
+        help="output stereo layout: ou=over-under (top/bottom, default), sbs=side-by-side (left/right)",
+    )
 
     args = parser.parse_args()
 
@@ -82,6 +94,8 @@ if __name__ == "__main__":
             hadjust=args.hadjust,
             projection=args.projection,
             spatial_extra=args.spatial_extra,
+            zoom=args.zoom,
+            stereo_format=args.stereo_format,
         )
         video_handler.make_video()
     else:
