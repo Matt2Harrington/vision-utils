@@ -56,7 +56,7 @@ if __name__ == "__main__":
         "--projection",
         type=str,
         default="rect",
-        help="projection passed to ./spatial: rect | fisheye | half_equirect (default rect)",
+        help="projection passed to ./spatial: rect | fisheye | equirect (default rect)",
     )
     parser.add_argument(
         "--spatial-extra",
