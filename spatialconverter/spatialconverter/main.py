@@ -81,6 +81,17 @@ if __name__ == "__main__":
         action="store_true",
         help="skip the ./spatial tagging step and stop after producing the raw stereo file (useful for non-Apple players)",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="single-frame preview mode: extract one frame, run depth shift + stereo stack, write a PNG, skip video encoding and spatial tagging",
+    )
+    parser.add_argument(
+        "--preview-time",
+        type=float,
+        default=None,
+        help="timestamp in seconds for the preview frame (default: middle of the video)",
+    )
 
     args = parser.parse_args()
 
@@ -103,6 +114,9 @@ if __name__ == "__main__":
             stereo_format=args.stereo_format,
             spatial_enabled=not args.no_spatial,
         )
-        video_handler.make_video()
+        if args.preview:
+            video_handler.make_preview(timestamp_sec=args.preview_time)
+        else:
+            video_handler.make_video()
     else:
         logging.info("Please add a photo or video if you want to see anything happen!")

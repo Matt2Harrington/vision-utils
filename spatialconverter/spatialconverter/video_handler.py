@@ -186,6 +186,43 @@ class VideoHandler(FileMixin):
         inpainted = cv2.inpaint(org_image, mask, 7, cv2.INPAINT_TELEA)
         return inpainted
 
+    @timing
+    def make_preview(self, output_path: Optional[str] = None, timestamp_sec: Optional[float] = None) -> str:
+        """Single-frame preview: extract one frame, run depth-shift + stereo
+        stack with current settings, write a PNG, skip encoding and spatial
+        tagging entirely. Used by the UI for fast iteration on settings."""
+        capture = cv2.VideoCapture(self.filename)
+        src_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        if timestamp_sec is not None:
+            target_idx = max(0, int(timestamp_sec * src_fps))
+        else:
+            target_idx = max(0, total_frames // 2)
+        if total_frames > 0:
+            target_idx = min(target_idx, total_frames - 1)
+        capture.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+        ok, frame = capture.read()
+        capture.release()
+        if not ok:
+            raise RuntimeError(
+                f"Could not read preview frame at index {target_idx} from {self.filename}"
+            )
+
+        frame = self._apply_zoom(frame)
+        # Reuse the single-frame stereo builder. It logs `frame: 1` like a
+        # normal run; benign for preview.
+        result = self.create_over_under_video_frame((frame, 1))
+        # result.frame is RGB after the cvtColor in that method; cv2.imwrite
+        # expects BGR.
+        bgr = cv2.cvtColor(result.frame, cv2.COLOR_RGB2BGR)
+
+        if output_path is None:
+            output_path = f"{self.get_directory_name()}/preview.png"
+        cv2.imwrite(output_path, bgr)
+        logging.info(f"Preview frame {target_idx} of {total_frames} -> {output_path}")
+        logging.info(f"OUTPUT: {output_path}")
+        return output_path
+
     def create_over_under_video_frame(self, frame) -> List[FrameData]:
         """Build the stereo frame. Stacking depends on self.stereo_format:
             "ou"  → left on top, right on bottom (vconcat)
