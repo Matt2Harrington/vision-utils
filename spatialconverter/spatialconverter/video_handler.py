@@ -239,6 +239,7 @@ class VideoHandler(FileMixin):
                 f"Spatial tagging disabled; raw stereo output left at "
                 f"{self.over_under_video_filename()}"
             )
+            logging.info(f"OUTPUT: {self.over_under_video_filename()}")
             return
 
         logging.info("Running spatial tagger")
@@ -260,3 +261,4 @@ class VideoHandler(FileMixin):
         result = subprocess.run(spatial_cmd, check=False)
         if result.returncode != 0:
             raise RuntimeError(f"./spatial exited with code {result.returncode}")
+        logging.info(f"OUTPUT: {self.spatial_video_filename()}")
