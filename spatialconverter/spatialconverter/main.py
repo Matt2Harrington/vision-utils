@@ -92,6 +92,23 @@ if __name__ == "__main__":
         default=None,
         help="timestamp in seconds for the preview frame (default: middle of the video)",
     )
+    parser.add_argument(
+        "--preview-clip",
+        action="store_true",
+        help="short-clip preview mode: render N seconds of video with current settings (honors --no-spatial)",
+    )
+    parser.add_argument(
+        "--preview-clip-duration",
+        type=float,
+        default=3.0,
+        help="length in seconds of the preview clip (default 3)",
+    )
+    parser.add_argument(
+        "--preview-clip-start",
+        type=float,
+        default=None,
+        help="timestamp in seconds where the preview clip starts (default: centered around the middle)",
+    )
 
     args = parser.parse_args()
 
@@ -116,6 +133,11 @@ if __name__ == "__main__":
         )
         if args.preview:
             video_handler.make_preview(timestamp_sec=args.preview_time)
+        elif args.preview_clip:
+            video_handler.make_preview_clip(
+                duration_sec=args.preview_clip_duration,
+                start_sec=args.preview_clip_start,
+            )
         else:
             video_handler.make_video()
     else:

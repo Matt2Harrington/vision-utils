@@ -186,6 +186,102 @@ class VideoHandler(FileMixin):
         inpainted = cv2.inpaint(org_image, mask, 7, cv2.INPAINT_TELEA)
         return inpainted
 
+    def _produce_frames_range(self, start_sec: float, duration_sec: float):
+        """Like produce_frames but only reads a [start_sec, start_sec+duration_sec)
+        window. Honors target_fps stride and zoom. Returns the same
+        (frame, kept_index) tuples produce_frames yields."""
+        capture = cv2.VideoCapture(self.filename)
+        src_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        start_frame = max(0, int(start_sec * src_fps))
+        end_frame = int((start_sec + duration_sec) * src_fps)
+        if total_frames > 0:
+            end_frame = min(end_frame, total_frames - 1)
+
+        if self.target_fps and src_fps > 0 and self.target_fps < src_fps:
+            stride = src_fps / self.target_fps
+        else:
+            stride = 1.0
+
+        capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        frame_idx = start_frame
+        next_target = float(start_frame)
+        kept_idx = 0
+        result = []
+        while frame_idx <= end_frame:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if frame_idx >= next_target:
+                kept_idx += 1
+                result.append((self._apply_zoom(frame), kept_idx))
+                next_target += stride
+            frame_idx += 1
+        capture.release()
+        return result
+
+    @timing
+    def make_preview_clip(
+        self,
+        duration_sec: float = 3.0,
+        start_sec: Optional[float] = None,
+        output_path: Optional[str] = None,
+    ) -> str:
+        """Render a short clip (default 3 sec) using current settings. Honors
+        spatial_enabled — if on, also tags the clip with ./spatial. No audio
+        in preview clips (keeps the implementation simple and timing tight)."""
+        capture = cv2.VideoCapture(self.filename)
+        src_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        capture.release()
+        src_duration = total_frames / src_fps if src_fps > 0 else 0.0
+
+        if start_sec is None:
+            start_sec = max(0.0, (src_duration / 2) - (duration_sec / 2))
+        end_sec = min(src_duration, start_sec + duration_sec) if src_duration else start_sec + duration_sec
+        actual_duration = end_sec - start_sec
+
+        frames = self._produce_frames_range(start_sec, actual_duration)
+        logging.info(f"Processed {len(frames)} frames")
+
+        multi_pool = Pool(processes=cpu_count())
+        output = multi_pool.map(self.create_over_under_video_frame, frames)
+        multi_pool.close()
+        multi_pool.join()
+        sorted_frames = sorted(output, key=lambda x: x.index)
+
+        out_fps = self.target_fps if (self.target_fps and self.target_fps < src_fps) else src_fps
+
+        if output_path is None:
+            output_path = f"{self.get_directory_name()}/preview_clip.mp4"
+
+        clip = ImageSequenceClip([obj.frame for obj in sorted_frames], fps=out_fps)
+        clip.write_videofile(output_path, codec="libx264")
+
+        if not self.spatial_enabled:
+            logging.info(f"OUTPUT: {output_path}")
+            return output_path
+
+        spatial_output = f"{self.get_directory_name()}/preview_clip_spatial.mov"
+        spatial_cmd = [
+            "./spatial", "make",
+            "-i", output_path,
+            "-f", self.stereo_format,
+            "-o", spatial_output,
+            "--cdist", str(self.cdist),
+            "--hfov", str(self.hfov),
+            "--hadjust", str(self.hadjust),
+            "--projection", self.projection,
+        ]
+        if self.spatial_extra:
+            spatial_cmd += shlex.split(self.spatial_extra)
+        logging.info(f"spatial cmd: {' '.join(shlex.quote(a) for a in spatial_cmd)}")
+        result = subprocess.run(spatial_cmd, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"./spatial exited with code {result.returncode}")
+        logging.info(f"OUTPUT: {spatial_output}")
+        return spatial_output
+
     @timing
     def make_preview(self, output_path: Optional[str] = None, timestamp_sec: Optional[float] = None) -> str:
         """Single-frame preview: extract one frame, run depth-shift + stereo
